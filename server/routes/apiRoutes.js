@@ -1,4 +1,3 @@
-
 const express = require("express");
 const mongoose = require("mongoose");
 
@@ -17,6 +16,41 @@ const {
   checkCrewSchedule,
   isCrewAvailable
 } = require("../services/assignmentService");
+
+const {
+  submitJob,
+  getStatus,
+  cancelJob
+} = require("../services/jobManager");
+
+// Return only safe job details
+const publicJob = (job) => ({
+  jobId: job.jobId,
+  status: job.status,
+  startedAt: job.startedAt,
+  completedAt: job.completedAt,
+  result: job.result,
+  error: job.error
+});
+
+// Submit a schedule job
+const startScheduleJob = (req, res) => {
+  try {
+    const job = submitJob();
+
+    return res.status(202).json({
+      message: "Schedule generation job submitted",
+      job: publicJob(job)
+    });
+  } catch (error) {
+    const statusCode =
+      error.message === "Generation in progress" ? 409 : 500;
+
+    return res.status(statusCode).json({
+      message: error.message
+    });
+  }
+};
 
 // Common error response
 const handleError = (res, error, message) => {
@@ -80,7 +114,6 @@ const validateAvailability = (availability) => {
 router.get("/pilots", async (req, res) => {
   try {
     const pilots = await Pilot.find();
-
     res.status(200).json(pilots);
   } catch (error) {
     handleError(res, error, "Get pilots error:");
@@ -112,7 +145,6 @@ router.post("/pilots", async (req, res) => {
 router.put("/pilots/:id/availability", async (req, res) => {
   try {
     const { availability } = req.body;
-
     const validationError = validateAvailability(availability);
 
     if (validationError) {
@@ -153,7 +185,6 @@ router.put("/pilots/:id/availability", async (req, res) => {
 router.get("/cabin-crew", async (req, res) => {
   try {
     const cabinCrew = await CabinCrew.find();
-
     res.status(200).json(cabinCrew);
   } catch (error) {
     handleError(res, error, "Get cabin crew error:");
@@ -180,12 +211,10 @@ router.post("/cabin-crew", async (req, res) => {
     handleError(res, error, "Create cabin crew error:");
   }
 });
-
 // UPDATE cabin crew availability
 router.put("/cabin-crew/:id/availability", async (req, res) => {
   try {
     const { availability } = req.body;
-
     const validationError = validateAvailability(availability);
 
     if (validationError) {
@@ -226,7 +255,6 @@ router.put("/cabin-crew/:id/availability", async (req, res) => {
 router.get("/flights", async (req, res) => {
   try {
     const flights = await Flight.find();
-
     res.status(200).json(flights);
   } catch (error) {
     handleError(res, error, "Get flights error:");
@@ -281,14 +309,12 @@ router.post("/assignments", async (req, res) => {
       assignmentStatus
     } = req.body;
 
-    // Check required fields
     if (!flightId || !crewMemberId || !crewType || !assignedRole) {
       return res.status(400).json({
         message: "Please provide all required assignment details"
       });
     }
 
-    // Validate IDs
     if (
       !mongoose.Types.ObjectId.isValid(flightId) ||
       !mongoose.Types.ObjectId.isValid(crewMemberId)
@@ -298,14 +324,12 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    // Validate crew type
     if (!["Pilot", "CabinCrew"].includes(crewType)) {
       return res.status(400).json({
         message: "Crew type must be Pilot or CabinCrew"
       });
     }
 
-    // Set default assignment status
     const status = assignmentStatus || "Assigned";
 
     if (!["Assigned", "Completed", "Cancelled"].includes(status)) {
@@ -314,7 +338,6 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    // Find flight
     const flight = await Flight.findById(flightId);
 
     if (!flight) {
@@ -329,7 +352,6 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    // Find the selected crew member
     let crewMember;
 
     if (crewType === "Pilot") {
@@ -344,10 +366,7 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    // ======================================
-    // CHECK PILOT REQUIREMENTS
-    // ======================================
-
+    // Check pilot requirements
     if (crewType === "Pilot") {
       if (crewMember.rank !== assignedRole) {
         return res.status(400).json({
@@ -382,10 +401,7 @@ router.post("/assignments", async (req, res) => {
       }
     }
 
-    // ======================================
-    // CHECK CABIN CREW REQUIREMENTS
-    // ======================================
-
+    // Check cabin crew requirements
     if (crewType === "CabinCrew") {
       const hasRequiredQualifications =
         flight.requiredCabinQualifications.every(
@@ -400,10 +416,7 @@ router.post("/assignments", async (req, res) => {
       }
     }
 
-    // ======================================
-    // CHECK AVAILABILITY AND SCHEDULE
-    // ======================================
-
+    // Check availability and schedule
     if (status !== "Cancelled") {
       const available = isCrewAvailable(crewMember, flight);
 
@@ -421,10 +434,7 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    // ======================================
-    // SAVE ASSIGNMENT
-    // ======================================
-
+    // Save assignment
     const assignment = new Assignment({
       flightId,
       crewMemberId,
@@ -445,7 +455,6 @@ router.post("/assignments", async (req, res) => {
   } catch (error) {
     console.error("Create assignment error:", error);
 
-    // Schedule conflict errors
     if (
       error.message.includes("overlapping flight") ||
       error.message.includes("10 hours of rest")
@@ -455,9 +464,7 @@ router.post("/assignments", async (req, res) => {
       });
     }
 
-    if (
-      error.message === "Flight not found"
-    ) {
+    if (error.message === "Flight not found") {
       return res.status(404).json({
         message: error.message
       });
@@ -466,7 +473,6 @@ router.post("/assignments", async (req, res) => {
     handleError(res, error, "Assignment creation failed:");
   }
 });
-
 // ==========================================
 // ELIGIBLE PILOT API
 // ==========================================
@@ -537,6 +543,56 @@ router.get(
     }
   }
 );
+
+// ==========================================
+// AUTOMATIC SCHEDULE GENERATION + OS JOB APIs
+// ==========================================
+
+// Generate schedule using OS job manager
+router.post("/generate-schedule", startScheduleJob);
+
+// Submit a scheduling job
+router.post("/schedule-jobs", startScheduleJob);
+
+// Get job status
+router.get("/schedule-jobs/:jobId", (req, res) => {
+  const job = getStatus(req.params.jobId);
+
+  if (!job) {
+    return res.status(404).json({
+      message: "Schedule job not found"
+    });
+  }
+
+  return res.status(200).json({
+    job: publicJob(job)
+  });
+});
+
+// Cancel a running job
+router.delete("/schedule-jobs/:jobId", async (req, res) => {
+  try {
+    const job = await cancelJob(req.params.jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        message: "Schedule job not found"
+      });
+    }
+
+    return res.status(200).json({
+      message: "Schedule job cancellation requested",
+      job: publicJob(job)
+    });
+  } catch (error) {
+    console.error("Cancel schedule job error:", error);
+
+    return res.status(500).json({
+      message: "Could not cancel schedule job",
+      error: error.message
+    });
+  }
+});
 
 // Export router
 module.exports = router;
